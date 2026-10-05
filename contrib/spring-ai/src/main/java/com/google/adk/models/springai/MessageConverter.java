@@ -72,6 +72,12 @@ public class MessageConverter {
    */
   private static final String THOUGHT_SIGNATURES_KEY = "thoughtSignatures";
 
+  /**
+   * Message-metadata key Spring AI's OpenAI-compatible providers use to carry reasoning content
+   * ("thinking") of reasoning models such as DeepSeek-R1, Qwen-Thinking and GLM.
+   */
+  private static final String REASONING_CONTENT_KEY = "reasoningContent";
+
   private final ObjectMapper objectMapper;
   private final ToolConverter toolConverter;
   private final ConfigMapper configMapper;
@@ -326,6 +332,11 @@ public class MessageConverter {
     List<byte[]> thoughtSignatures = new ArrayList<>();
 
     for (Part part : content.parts().orElse(List.of())) {
+      // Thought parts carry the model's reasoning; never replay it to the model or the
+      // conversation history would balloon with every turn's thinking.
+      if (part.thought().orElse(false)) {
+        continue;
+      }
       if (part.text().isPresent()) {
         textBuilder.append(part.text().get());
       } else if (part.functionCall().isPresent()) {
@@ -394,8 +405,27 @@ public class MessageConverter {
 
     Content content = convertAssistantMessageToContent(assistantMessage);
 
-    // For streaming responses, check if this is a partial response
-    boolean isPartial = isStreaming && isPartialResponse(assistantMessage);
+    // Surface reasoning ("thinking") of reasoning models as thought parts: streamed as
+    // partial events and persisted with the final response, never replayed to the model
+    // (handleAssistantContent skips thought parts when building history). Reasoning
+    // metadata may be cumulative per stream on OpenAI-compatible providers;
+    // StreamingResponseAggregator normalizes it to deltas for partial events.
+    String reasoning = extractReasoningContent(assistantMessage);
+    if (reasoning != null) {
+      Part thoughtPart = Part.builder().thought(true).text(reasoning).build();
+      List<Part> partsWithThought = new ArrayList<>();
+      partsWithThought.add(thoughtPart);
+      if (content.parts().isPresent()) {
+        partsWithThought.addAll(content.parts().get());
+      }
+      content =
+          Content.builder().role(content.role().orElse("model")).parts(partsWithThought).build();
+    }
+
+    // Streaming chunks are always partial: the final (persisted) response is produced once,
+    // by StreamingResponseAggregator, on stream completion. Mid-stream punctuation heuristics
+    // misclassify non-ASCII terminal punctuation (e.g. CJK) and can fire early on '.'.
+    boolean isPartial = isStreaming;
     boolean isTurnComplete = !isStreaming || isTurnCompleteResponse(chatResponse);
 
     LlmResponse.Builder responseBuilder =
@@ -421,7 +451,26 @@ public class MessageConverter {
     return value != null ? value.intValue() : 0;
   }
 
-  /** Determines if an assistant message represents a partial response in streaming. */
+  /** Returns the reasoning ("thinking") content carried in message metadata, or null. */
+  private String extractReasoningContent(AssistantMessage assistantMessage) {
+    if (assistantMessage.getMetadata() == null) {
+      return null;
+    }
+    Object reasoning = assistantMessage.getMetadata().get(REASONING_CONTENT_KEY);
+    if (reasoning instanceof String text && !text.isBlank()) {
+      return text;
+    }
+    return null;
+  }
+
+  /**
+   * Determines if an assistant message represents a partial response in streaming.
+   *
+   * @deprecated No longer used: streaming chunks are always partial and the final response is
+   *     derived from the stream completion signal (see SpringAI). Kept one release for source
+   *     compatibility.
+   */
+  @Deprecated
   private boolean isPartialResponse(AssistantMessage message) {
     // Check if message has incomplete content (e.g., ends mid-sentence, has pending tool calls)
     if (message.getText() != null && !message.getText().isEmpty()) {

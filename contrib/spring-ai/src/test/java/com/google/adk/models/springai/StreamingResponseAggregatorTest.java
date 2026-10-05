@@ -85,6 +85,70 @@ class StreamingResponseAggregatorTest {
   }
 
   @Test
+  void testNormalizeReasoningDeltasRewritesCumulativeToDelta() {
+    // Spring AI's OpenAI provider carries reasoning metadata cumulative from stream start;
+    // partial events must carry pure deltas downstream.
+    LlmResponse firstNormalized = aggregator.normalizeReasoningDeltas(reasoningResponse("I think"));
+    assertThat(firstNormalized.content().get().parts().get().get(0).text()).contains("I think");
+
+    LlmResponse secondNormalized =
+        aggregator.normalizeReasoningDeltas(reasoningResponse("I think therefore"));
+    assertThat(secondNormalized.content().get().parts().get().get(0).text()).contains(" therefore");
+
+    // Repeated cumulative fragment (provider resends the same text) yields an empty delta
+    LlmResponse repeated =
+        aggregator.normalizeReasoningDeltas(reasoningResponse("I think therefore"));
+    assertThat(repeated.content().get().parts().get().get(0).text()).contains("");
+
+    LlmResponse finalResponse = aggregator.getFinalResponse();
+    List<Part> parts = finalResponse.content().get().parts().get();
+    assertThat(parts.get(0).thought()).contains(true);
+    assertThat(parts.get(0).text()).contains("I think therefore");
+  }
+
+  @Test
+  void testNormalizeReasoningDeltasFallsBackToRawWhenNotAPrefix() {
+    aggregator.normalizeReasoningDeltas(reasoningResponse("I think"));
+    LlmResponse other = aggregator.normalizeReasoningDeltas(reasoningResponse("Actually"));
+
+    assertThat(other.content().get().parts().get().get(0).text()).contains("Actually");
+
+    LlmResponse finalResponse = aggregator.getFinalResponse();
+    assertThat(finalResponse.content().get().parts().get().get(0).text())
+        .contains("I thinkActually");
+  }
+
+  @Test
+  void testProcessStreamingResponseDoesNotMixThoughtIntoText() {
+    Content content =
+        Content.builder()
+            .role("model")
+            .parts(
+                List.of(
+                    Part.builder().thought(true).text("reasoning").build(),
+                    Part.fromText("answer")))
+            .build();
+    LlmResponse response = LlmResponse.builder().content(content).partial(true).build();
+
+    aggregator.processStreamingResponse(response);
+
+    assertThat(aggregator.getAccumulatedTextLength()).isEqualTo(6);
+    LlmResponse finalResponse = aggregator.getFinalResponse();
+    List<Part> parts = finalResponse.content().get().parts().get();
+    assertThat(parts).hasSize(1);
+    assertThat(parts.get(0).text()).contains("answer");
+  }
+
+  private LlmResponse reasoningResponse(String reasoning) {
+    Content content =
+        Content.builder()
+            .role("model")
+            .parts(List.of(Part.builder().thought(true).text(reasoning).build()))
+            .build();
+    return LlmResponse.builder().content(content).partial(true).build();
+  }
+
+  @Test
   void testProcessMultipleTextResponses() {
     Content firstContent =
         Content.builder().role("model").parts(List.of(Part.fromText("Hello"))).build();

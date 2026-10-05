@@ -520,8 +520,68 @@ class MessageConverterTest {
   }
 
   @Test
-  void testPartialResponseDetection() {
-    // Test partial response (no punctuation ending)
+  void testToLlmResponseSurfacesReasoningAsThoughtPart() {
+    AssistantMessage assistantMessage =
+        AssistantMessage.builder()
+            .content("Final answer")
+            .properties(Map.of("reasoningContent", "Let me think."))
+            .build();
+    Generation generation = new Generation(assistantMessage);
+    ChatResponse chatResponse = new ChatResponse(List.of(generation));
+
+    LlmResponse llmResponse = messageConverter.toLlmResponse(chatResponse, false);
+
+    List<Part> parts = llmResponse.content().get().parts().get();
+    assertThat(parts).hasSize(2);
+    assertThat(parts.get(0).thought()).contains(true);
+    assertThat(parts.get(0).text()).contains("Let me think.");
+    assertThat(parts.get(1).thought()).isEmpty();
+    assertThat(parts.get(1).text()).contains("Final answer");
+  }
+
+  @Test
+  void testToLlmResponseWithoutReasoningMetadataHasNoThoughtPart() {
+    AssistantMessage assistantMessage = new AssistantMessage("Just text");
+    Generation generation = new Generation(assistantMessage);
+    ChatResponse chatResponse = new ChatResponse(List.of(generation));
+
+    LlmResponse llmResponse = messageConverter.toLlmResponse(chatResponse, false);
+
+    List<Part> parts = llmResponse.content().get().parts().get();
+    assertThat(parts).hasSize(1);
+    assertThat(parts.get(0).thought()).isEmpty();
+  }
+
+  @Test
+  void testToLlmPromptSkipsThoughtPartsInModelHistory() {
+    // Reasoning must never be replayed to the model, or the conversation history would
+    // balloon with every turn's thinking.
+    Content modelContent =
+        Content.builder()
+            .role("model")
+            .parts(
+                List.of(
+                    Part.builder().thought(true).text("secret reasoning").build(),
+                    Part.fromText("Visible answer")))
+            .build();
+    LlmRequest request = LlmRequest.builder().contents(List.of(modelContent)).build();
+
+    Prompt prompt = messageConverter.toLlmPrompt(request);
+
+    AssistantMessage assistant =
+        prompt.getInstructions().stream()
+            .filter(AssistantMessage.class::isInstance)
+            .map(AssistantMessage.class::cast)
+            .findFirst()
+            .orElseThrow();
+    assertThat(assistant.getText()).isEqualTo("Visible answer");
+  }
+
+  @Test
+  void testToLlmResponseStreamingAlwaysMarksChunksPartial() {
+    // Streaming chunks are always partial regardless of punctuation: the final (persisted)
+    // response is derived from the stream completion signal, not from mid-stream guessing.
+    // Punctuation-based classification dropped turns ending with CJK terminal punctuation.
     AssistantMessage partialMessage = new AssistantMessage("I am thinking");
     Generation partialGeneration = new Generation(partialMessage);
     ChatResponse partialResponse = new ChatResponse(List.of(partialGeneration));
@@ -529,13 +589,12 @@ class MessageConverterTest {
     LlmResponse partialLlmResponse = messageConverter.toLlmResponse(partialResponse, true);
     assertThat(partialLlmResponse.partial()).contains(true);
 
-    // Test complete response (ends with punctuation)
-    AssistantMessage completeMessage = new AssistantMessage("I am done.");
-    Generation completeGeneration = new Generation(completeMessage);
-    ChatResponse completeResponse = new ChatResponse(List.of(completeGeneration));
+    AssistantMessage cjkMessage = new AssistantMessage("今天天气不错。");
+    Generation cjkGeneration = new Generation(cjkMessage);
+    ChatResponse cjkResponse = new ChatResponse(List.of(cjkGeneration));
 
-    LlmResponse completeLlmResponse = messageConverter.toLlmResponse(completeResponse, true);
-    assertThat(completeLlmResponse.partial()).contains(false);
+    LlmResponse cjkLlmResponse = messageConverter.toLlmResponse(cjkResponse, true);
+    assertThat(cjkLlmResponse.partial()).contains(true);
   }
 
   @Test

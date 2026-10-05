@@ -37,6 +37,11 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 public class StreamingResponseAggregator {
 
   private final StringBuffer textAccumulator = new StringBuffer();
+  private final StringBuffer reasoningAccumulator = new StringBuffer();
+
+  /** Last raw (possibly cumulative) reasoning content seen, for delta normalization. */
+  private String lastRawReasoning = "";
+
   private final List<Part> toolCallParts = new CopyOnWriteArrayList<>();
   private final ReadWriteLock lock = new ReentrantReadWriteLock();
   private volatile boolean isFirstResponse = true;
@@ -61,6 +66,11 @@ public class StreamingResponseAggregator {
     try {
       // Process each part in the response
       for (Part part : content.parts().get()) {
+        if (part.thought().orElse(false)) {
+          // Reasoning deltas are already accumulated by normalizeReasoningDeltas; never
+          // mix thought text into the response text.
+          continue;
+        }
         if (part.text().isPresent()) {
           textAccumulator.append(part.text().get());
         } else if (part.functionCall().isPresent()) {
@@ -71,6 +81,10 @@ public class StreamingResponseAggregator {
 
       // Create aggregated content
       List<Part> aggregatedParts = new ArrayList<>();
+      if (reasoningAccumulator.length() > 0) {
+        aggregatedParts.add(
+            Part.builder().thought(true).text(reasoningAccumulator.toString()).build());
+      }
       if (textAccumulator.length() > 0) {
         aggregatedParts.add(Part.fromText(textAccumulator.toString()));
       }
@@ -105,6 +119,9 @@ public class StreamingResponseAggregator {
     lock.writeLock().lock();
     try {
       List<Part> finalParts = new ArrayList<>();
+      if (reasoningAccumulator.length() > 0) {
+        finalParts.add(Part.builder().thought(true).text(reasoningAccumulator.toString()).build());
+      }
       if (textAccumulator.length() > 0) {
         finalParts.add(Part.fromText(textAccumulator.toString()));
       }
@@ -117,6 +134,8 @@ public class StreamingResponseAggregator {
 
       // Reset internal state without calling reset() to avoid nested locking
       textAccumulator.setLength(0);
+      reasoningAccumulator.setLength(0);
+      lastRawReasoning = "";
       toolCallParts.clear();
       isFirstResponse = true;
 
@@ -142,9 +161,62 @@ public class StreamingResponseAggregator {
   public boolean isEmpty() {
     lock.readLock().lock();
     try {
-      return textAccumulator.length() == 0 && toolCallParts.isEmpty();
+      return textAccumulator.length() == 0
+          && toolCallParts.isEmpty()
+          && reasoningAccumulator.length() == 0;
     } finally {
       lock.readLock().unlock();
+    }
+  }
+
+  /**
+   * Normalizes reasoning ("thinking") parts of a streaming response to pure deltas.
+   *
+   * <p>OpenAI-compatible providers differ in reasoning chunk semantics: some stream pure deltas,
+   * others (including Spring AI's OpenAI accumulator) carry text that is cumulative from the start
+   * of the stream. Downstream consumers need one consistent shape; this method applies prefix
+   * detection against the last raw value seen on this stream and rewrites each thought part to its
+   * delta, so both partial events and the aggregated final response carry non-repeating reasoning.
+   *
+   * @param response A streaming response whose thought parts may be cumulative
+   * @return The response with thought-part text rewritten to deltas (same instance if there is
+   *     nothing to normalize)
+   */
+  public LlmResponse normalizeReasoningDeltas(LlmResponse response) {
+    if (response.content().isEmpty() || response.content().get().parts().isEmpty()) {
+      return response;
+    }
+    lock.writeLock().lock();
+    try {
+      List<Part> parts = response.content().get().parts().get();
+      List<Part> rewritten = null;
+      for (int i = 0; i < parts.size(); i++) {
+        Part part = parts.get(i);
+        if (part.thought().orElse(false) && part.text().isPresent()) {
+          String raw = part.text().get();
+          // Repeated cumulative fragments (provider resends the same text) must yield an empty
+          // delta, not the whole fragment again — hence startsWith alone, no length gate.
+          String delta =
+              raw.startsWith(lastRawReasoning) ? raw.substring(lastRawReasoning.length()) : raw;
+          lastRawReasoning = raw;
+          reasoningAccumulator.append(delta);
+          if (rewritten == null) {
+            rewritten = new ArrayList<>(parts);
+          }
+          rewritten.set(i, Part.builder().thought(true).text(delta).build());
+        }
+      }
+      if (rewritten == null) {
+        return response;
+      }
+      return LlmResponse.builder()
+          .content(Content.builder().role("model").parts(rewritten).build())
+          .partial(response.partial().orElse(null))
+          .turnComplete(response.turnComplete().orElse(null))
+          .usageMetadata(response.usageMetadata().orElse(null))
+          .build();
+    } finally {
+      lock.writeLock().unlock();
     }
   }
 
