@@ -1,0 +1,18 @@
+contrib/spring-ai/src/main/java/com/google/adk/models/springai/ToolConverter.java
+  h_557c0f9a241549 100-102,106-113
+  h_557c0f9a241549 103-105
+contrib/spring-ai/src/test/java/com/google/adk/models/springai/ToolConverterTest.java
+  h_557c0f9a241549 161-198
+  h_557c0f9a241549 199-210
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a56645fdaa2c16a717d20c8b317c8c4c9312a3f9",
+  "prompts": {},
+  "humans": {
+    "h_557c0f9a241549": {
+      "author": "jixing.xia <caps_xia@163.com>"
+    }
+  }
+}
