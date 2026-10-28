@@ -1,0 +1,25 @@
+contrib/spring-ai/src/main/java/com/google/adk/models/springai/StreamingResponseAggregator.java
+  h_557c0f9a241549 21,42,46-52,85,152,158,170,175,195
+  h_557c0f9a241549 20,41,43-45,54-57,61-66,86-92,94,97-109,114,145,147,151,153-157,159-169,173-174,177-180,193-194,197-200,211,221,226-250
+contrib/spring-ai/src/main/java/com/google/adk/models/springai/MessageConverter.java
+  h_557c0f9a241549 323-324
+contrib/spring-ai/src/test/java/com/google/adk/models/springai/SpringAITest.java
+  h_557c0f9a241549 38-39,157-158,161,168-243,308-379,494-495
+  h_557c0f9a241549 27,32,37,244-307
+contrib/spring-ai/src/main/java/com/google/adk/models/springai/SpringAI.java
+  h_557c0f9a241549 207-210,228,248-252
+contrib/spring-ai/src/test/java/com/google/adk/models/springai/MessageConverterTest.java
+  h_557c0f9a241549 535-538,551
+  h_557c0f9a241549 1072-1073,1100-1101
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a97469c400ae39d4c88384581364a44981743ffb",
+  "prompts": {},
+  "humans": {
+    "h_557c0f9a241549": {
+      "author": "jixing.xia <caps_xia@163.com>"
+    }
+  }
+}
