@@ -98,6 +98,16 @@ public class MessageConverter {
   /** Metadata key the Spring AI Anthropic provider sets only on thinking-block generations. */
   private static final String ANTHROPIC_THINKING_SIGNATURE_KEY = "signature";
 
+  /**
+   * Metadata key the Spring AI OpenAI provider uses to carry reasoning content of thinking models
+   * (DeepSeek-R1, GLM, Qwen-Thinking) behind OpenAI-compatible gateways; the value is cumulative
+   * per stream (the provider concatenates chunks by response id).
+   */
+  static final String OPENAI_REASONING_CONTENT_KEY = "reasoningContent";
+
+  /** Last raw reasoning value seen on the current stream, for cumulative-to-delta conversion. */
+  private String lastRawReasoning = "";
+
   /** Metadata key the Spring AI Google GenAI provider uses for the candidate index. */
   private static final String CANDIDATE_INDEX_KEY = "candidateIndex";
 
@@ -676,6 +686,11 @@ public class MessageConverter {
         : metadata.get(OPENAI_CHOICE_INDEX_KEY);
   }
 
+  /** Resets per-stream reasoning normalization state; call at the start of each stream. */
+  public void resetReasoningNormalization() {
+    lastRawReasoning = "";
+  }
+
   private int nullSafeInt(@Nullable Integer value) {
     return value != null ? value.intValue() : 0;
   }
@@ -729,6 +744,24 @@ public class MessageConverter {
 
   private Content convertAssistantMessageToContent(AssistantMessage assistantMessage) {
     List<Part> parts = new ArrayList<>();
+
+    Map<String, Object> assistantMetadata = assistantMessage.getMetadata();
+    // OpenAI-compatible reasoning arrives as a separate metadata field (cumulative per stream)
+    // rather than a flagged text part; surface it as a thought part ahead of the answer text.
+    if (assistantMetadata != null
+        && assistantMetadata.get(OPENAI_REASONING_CONTENT_KEY) instanceof String reasoning
+        && !reasoning.isBlank()) {
+      // The value is cumulative per stream (the provider concatenates chunks by response id):
+      // emit only the new suffix; a non-prefix value resets the tracking.
+      String reasoningDelta =
+          reasoning.length() >= lastRawReasoning.length() && reasoning.startsWith(lastRawReasoning)
+              ? reasoning.substring(lastRawReasoning.length())
+              : reasoning;
+      lastRawReasoning = reasoning;
+      if (!reasoningDelta.isEmpty()) {
+        parts.add(Part.builder().text(reasoningDelta).thought(true).build());
+      }
+    }
 
     if (assistantMessage.getText() != null && !assistantMessage.getText().isEmpty()) {
       Map<String, Object> metadata = assistantMessage.getMetadata();

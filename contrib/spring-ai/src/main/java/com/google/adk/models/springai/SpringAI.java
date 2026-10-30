@@ -227,6 +227,7 @@ public class SpringAI extends BaseLlm {
   private Flowable<LlmResponse> streamResponses(LlmRequest llmRequest) {
     Prompt prompt = messageConverter.toLlmPrompt(llmRequest, resolveDefaultOptions());
     observabilityHandler.logRequest(prompt.toString(), model());
+    messageConverter.resetReasoningNormalization();
     StreamAggregation aggregation = new StreamAggregation();
     return Flowable.fromPublisher(streamingChatModel.stream(prompt))
         .concatMap(aggregation::processChunk)

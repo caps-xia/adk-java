@@ -126,6 +126,53 @@ class SpringAITest {
   }
 
   @Test
+  void testGenerateContentStreamingOpenAiReasoningSurfacedAsThoughtParts() {
+    // OpenAI-compatible thinking models expose reasoning under the reasoningContent metadata,
+    // cumulative per stream. The bridge must surface it as thought parts (deltas, not
+    // cumulative repeats) kept separate from the answer text on the aggregated final.
+    AssistantMessage thought1 =
+        AssistantMessage.builder().content("").properties(Map.of("reasoningContent", "I ")).build();
+    AssistantMessage thought2 =
+        AssistantMessage.builder()
+            .content("")
+            .properties(Map.of("reasoningContent", "I think therefore"))
+            .build();
+    AssistantMessage answer = new AssistantMessage("The answer.");
+    Flux<ChatResponse> responseFlux =
+        Flux.just(
+            new ChatResponse(List.of(new Generation(thought1))),
+            new ChatResponse(List.of(new Generation(thought2))),
+            new ChatResponse(List.of(new Generation(answer))));
+
+    when(mockStreamingChatModel.stream(any(Prompt.class))).thenReturn(responseFlux);
+
+    SpringAI springAI = new SpringAI(mockStreamingChatModel);
+
+    TestSubscriber<LlmResponse> testObserver = springAI.generateContent(testRequest, true).test();
+
+    testObserver.awaitDone(5, TimeUnit.SECONDS);
+    testObserver.assertComplete();
+    testObserver.assertNoErrors();
+    List<LlmResponse> responses = testObserver.values();
+
+    // Partial chunks carry reasoning deltas, not cumulative repeats
+    String firstThought = responses.get(0).content().get().parts().get().get(0).text().orElse("");
+    assertThat(firstThought).isEqualTo("I ");
+    String secondThought = responses.get(1).content().get().parts().get().get(0).text().orElse("");
+    // delta of "I think therefore" over the previous raw "I "
+    assertThat(secondThought).isEqualTo("think therefore");
+
+    // Aggregated final: one thought part (full reasoning) separate from the answer part
+    LlmResponse finalResponse = responses.get(responses.size() - 1);
+    assertThat(finalResponse.partial()).contains(false);
+    List<Part> finalParts = finalResponse.content().get().parts().get();
+    assertThat(finalParts.get(0).thought()).contains(true);
+    assertThat(finalParts.get(0).text()).contains("I think therefore");
+    assertThat(finalParts.get(finalParts.size() - 1).thought().isEmpty()).isTrue();
+    assertThat(finalParts.get(finalParts.size() - 1).text()).contains("The answer.");
+  }
+
+  @Test
   void testGenerateContentNonStreaming() {
     when(mockChatModel.call(any(Prompt.class))).thenReturn(testChatResponse);
 
