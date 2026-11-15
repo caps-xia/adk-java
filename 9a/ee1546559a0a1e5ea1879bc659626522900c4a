@@ -1,0 +1,17 @@
+contrib/spring-ai/src/main/java/com/google/adk/models/springai/MessageConverter.java
+  h_557c0f9a241549 461,464-465,467-473
+  h_557c0f9a241549 84-87,462-463,466
+contrib/spring-ai/src/test/java/com/google/adk/models/springai/MessageConverterProviderNeutralOptionsTest.java
+  h_557c0f9a241549 1-106
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9aee1546559a0a1e5ea1879bc659626522900c4a",
+  "prompts": {},
+  "humans": {
+    "h_557c0f9a241549": {
+      "author": "jixing.xia <caps_xia@163.com>"
+    }
+  }
+}
